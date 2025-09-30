@@ -72,8 +72,11 @@ When handling a user query:
 2. Identify which specialist agent(s) match the query (refer to specialist-agents list)
 3. Use delegate_to_agent with the agent_id to send the query (returns immediately with chat_id)
 4. Use check_agent_response with the chat_id to retrieve the response
-5. If agent is still processing, wait briefly and check again
-6. Present the response to the user
+5. If the agent is still processing (status: "processing"), call check_agent_response again after waiting
+6. Continue checking until you receive status: "completed" or "error"
+7. Present the complete response to the user
+
+CRITICAL: Do NOT return to the user until you have the complete response from the delegated agent. Do NOT say "I will follow up" or "checking in a moment". Keep calling check_agent_response until you get the full answer, then present it to the user.
 </workflow>
 
 <multi-agent-synthesis>
