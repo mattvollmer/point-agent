@@ -1,13 +1,15 @@
 import { convertToModelMessages, streamText, tool } from "ai";
 import * as blink from "blink";
 import { z } from "zod";
+import * as slackbot from "@blink-sdk/slackbot";
 
 const agent = blink.agent();
 
 agent.on("chat", async ({ messages, context }) => {
-  return streamText({
-    model: "anthropic/claude-sonnet-4.5",
-    system: `You are an orchestration agent that can discover and delegate to other specialized agents.
+  // Check if this is a Slack message
+  const slackMetadata = slackbot.findLastMessageMetadata(messages);
+
+  let systemPrompt = `You are an orchestration agent that can discover and delegate to other specialized agents.
 
 You have tools to:
 - List all available agents in your organization
@@ -27,9 +29,27 @@ Conversation continuity:
 - This allows the specialist agent to maintain context from previous questions
 - Each agent has its own separate conversation thread
 
-You can delegate to multiple agents if needed and synthesize their responses.`,
+You can delegate to multiple agents if needed and synthesize their responses.`;
+
+  // Add Slack formatting rules if message is from Slack
+  if (slackMetadata) {
+    systemPrompt += `
+
+<formatting-rules>
+${slackbot.systemPrompt}
+</formatting-rules>`;
+  }
+
+  return streamText({
+    model: "anthropic/claude-sonnet-4.5",
+    system: systemPrompt,
     messages: convertToModelMessages(messages),
     tools: {
+      ...slackbot.tools({
+        messages,
+        context,
+      }),
+
       list_agents: tool({
         description:
           "List all available agents in the organization. Use this to discover what specialized agents exist and what they can do.",
@@ -406,6 +426,22 @@ You can delegate to multiple agents if needed and synthesize their responses.`,
       }),
     },
   });
+});
+
+agent.on("request", async (request, context) => {
+  const url = new URL(request.url);
+
+  // Handle Slack OAuth and webhooks
+  if (url.pathname.startsWith("/slack")) {
+    if (slackbot.isOAuthRequest(request)) {
+      return slackbot.handleOAuthRequest(request, context);
+    }
+    if (slackbot.isWebhook(request)) {
+      return slackbot.handleWebhook(request, context);
+    }
+  }
+
+  return new Response("Not Found", { status: 404 });
 });
 
 agent.serve();
