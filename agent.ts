@@ -202,7 +202,7 @@ You can delegate to multiple agents if needed and synthesize their responses.`,
 
           // Get the chat messages
           const response = await fetch(
-            `${baseURL}/api/chats/${chat_id}/messages`,
+            `${baseURL}/api/messages?chat_id=${chat_id}`,
             {
               method: "GET",
               headers: {
