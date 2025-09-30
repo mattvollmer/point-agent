@@ -148,7 +148,12 @@ You can delegate to multiple agents if needed and synthesize their responses.`,
               messages: [
                 {
                   role: "user",
-                  content: query,
+                  parts: [
+                    {
+                      type: "text",
+                      text: query,
+                    },
+                  ],
                 },
               ],
             }),
