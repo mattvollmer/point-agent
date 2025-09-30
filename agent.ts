@@ -115,7 +115,7 @@ When asked a question, first discover what agents are available, then route the 
             );
           }
 
-          const baseURL = process.env.BLINK_API_URL || "https://blink.so";
+          const baseURL = "https://blink.so";
 
           const response = await fetch(`${baseURL}/api/agents/${agent_id}`, {
             headers: {
