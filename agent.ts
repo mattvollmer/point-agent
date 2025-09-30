@@ -26,18 +26,18 @@ When asked a question, first discover what agents are available, then route the 
             .uuid()
             .optional()
             .describe(
-              "Optional organization ID to filter agents. If not provided, uses BLINK_ORG_ID environment variable or lists agents from all organizations.",
+              "Optional organization ID to filter agents. If not provided, uses BLINK_ORG_ID environment variable or lists agents from all organizations."
             ),
         }),
         execute: async ({ organization_id }) => {
           const apiToken = process.env.BLINK_API_TOKEN;
           if (!apiToken) {
             throw new Error(
-              "BLINK_API_TOKEN environment variable not set. Please configure your Blink API token.",
+              "BLINK_API_TOKEN environment variable not set. Please configure your Blink API token."
             );
           }
 
-          const baseURL = process.env.BLINK_API_URL || "https://blink.so";
+          const baseURL = "https://blink.so";
 
           // Use provided org_id, fall back to env var, or list all
           const orgId = organization_id || process.env.BLINK_ORG_ID;
@@ -52,7 +52,7 @@ When asked a question, first discover what agents are available, then route the 
 
             if (!orgsResponse.ok) {
               throw new Error(
-                `Failed to list organizations: ${orgsResponse.statusText}`,
+                `Failed to list organizations: ${orgsResponse.statusText}`
               );
             }
 
@@ -65,7 +65,7 @@ When asked a question, first discover what agents are available, then route the 
                     headers: {
                       Authorization: `Bearer ${apiToken}`,
                     },
-                  },
+                  }
                 );
 
                 if (!agentsResponse.ok) {
@@ -74,7 +74,7 @@ When asked a question, first discover what agents are available, then route the 
 
                 const data = (await agentsResponse.json()) as { items: any[] };
                 return data.items;
-              }),
+              })
             );
             return allAgents.flat();
           }
@@ -86,7 +86,7 @@ When asked a question, first discover what agents are available, then route the 
               headers: {
                 Authorization: `Bearer ${apiToken}`,
               },
-            },
+            }
           );
 
           if (!response.ok) {
@@ -111,7 +111,7 @@ When asked a question, first discover what agents are available, then route the 
           const apiToken = process.env.BLINK_API_TOKEN;
           if (!apiToken) {
             throw new Error(
-              "BLINK_API_TOKEN environment variable not set. Please configure your Blink API token.",
+              "BLINK_API_TOKEN environment variable not set. Please configure your Blink API token."
             );
           }
 
