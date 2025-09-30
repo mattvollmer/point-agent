@@ -4,7 +4,6 @@
   "type": "module",
   "private": true,
   "dependencies": {
-    "@blink.so/api": "^0.0.10",
     "@types/node": "^24.6.0",
     "ai": "^5.0.59",
     "blink": "^0.1.74",

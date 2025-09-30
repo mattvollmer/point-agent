@@ -5,6 +5,5 @@ export default defineConfig({
   outdir: ".blink/build",
   build: buildWithEsbuild({
     platform: "node",
-    external: ["@blink.so/api"],
   }),
 });

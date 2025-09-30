@@ -1,7 +1,6 @@
 import { convertToModelMessages, streamText, tool } from "ai";
 import * as blink from "blink";
 import { z } from "zod";
-import Client from "./blink-api.js";
 
 const agent = blink.agent();
 
@@ -38,29 +37,61 @@ When asked a question, first discover what agents are available, then route the 
             );
           }
 
-          const client = new Client({ authToken: apiToken });
+          const baseURL = process.env.BLINK_API_URL || "https://blink.so";
 
           // If no org specified, get all orgs and list agents from each
           if (!organization_id) {
-            const orgs = await client.organizations.list();
+            const orgsResponse = await fetch(`${baseURL}/api/organizations`, {
+              headers: {
+                Authorization: `Bearer ${apiToken}`,
+              },
+            });
+
+            if (!orgsResponse.ok) {
+              throw new Error(
+                `Failed to list organizations: ${orgsResponse.statusText}`,
+              );
+            }
+
+            const orgs = await orgsResponse.json();
             const allAgents = await Promise.all(
-              orgs.map(async (org) => {
-                const response = await client.agents.list({
-                  organization_id: org.id,
-                  per_page: 100,
-                });
-                return response.items;
+              orgs.map(async (org: any) => {
+                const agentsResponse = await fetch(
+                  `${baseURL}/api/agents?organization_id=${org.id}&per_page=100`,
+                  {
+                    headers: {
+                      Authorization: `Bearer ${apiToken}`,
+                    },
+                  },
+                );
+
+                if (!agentsResponse.ok) {
+                  return [];
+                }
+
+                const data = await agentsResponse.json();
+                return data.items;
               }),
             );
             return allAgents.flat();
           }
 
           // Otherwise list agents from specific org
-          const response = await client.agents.list({
-            organization_id,
-            per_page: 100,
-          });
-          return response.items;
+          const response = await fetch(
+            `${baseURL}/api/agents?organization_id=${organization_id}&per_page=100`,
+            {
+              headers: {
+                Authorization: `Bearer ${apiToken}`,
+              },
+            },
+          );
+
+          if (!response.ok) {
+            throw new Error(`Failed to list agents: ${response.statusText}`);
+          }
+
+          const data = await response.json();
+          return data.items;
         },
       }),
 
@@ -81,10 +112,19 @@ When asked a question, first discover what agents are available, then route the 
             );
           }
 
-          const client = new Client({ authToken: apiToken });
+          const baseURL = process.env.BLINK_API_URL || "https://blink.so";
 
-          // Get the agent details
-          const agent = await client.agents.get(agent_id);
+          const response = await fetch(`${baseURL}/api/agents/${agent_id}`, {
+            headers: {
+              Authorization: `Bearer ${apiToken}`,
+            },
+          });
+
+          if (!response.ok) {
+            throw new Error(`Failed to get agent: ${response.statusText}`);
+          }
+
+          const agent = await response.json();
 
           return {
             id: agent.id,
