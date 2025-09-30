@@ -1,5 +1,8 @@
 // Wrapper to force Node.js client import
-// This avoids Node.js resolving to the browser version
-import Client from "@blink.so/api/dist/client.node.js";
+// We use createRequire to load the CommonJS version which is definitely Node.js
+import { createRequire } from "module";
 
-export default Client;
+const require = createRequire(import.meta.url);
+const Client = require("@blink.so/api");
+
+export default Client.default || Client;
