@@ -1,7 +1,7 @@
 import { convertToModelMessages, streamText, tool } from "ai";
 import * as blink from "blink";
 import { z } from "zod";
-import Client from "@blink.so/api";
+import Client from "./blink-api.js";
 
 const agent = blink.agent();
 
