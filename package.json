@@ -1,0 +1,13 @@
+{
+  "name": "point-agent",
+  "main": "agent.ts",
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "@types/node": "^24.6.0",
+    "ai": "^5.0.59",
+    "blink": "^0.1.74",
+    "esbuild": "^0.25.10",
+    "zod": "^4.1.11"
+  }
+}
