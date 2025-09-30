@@ -11,7 +11,6 @@ agent.on("chat", async ({ messages }) => {
 
 You have tools to:
 - List all available agents in your organization
-- Get detailed capabilities of any agent
 - Delegate queries to the appropriate specialized agents
 
 When asked a question, first discover what agents are available, then route the query appropriately.`,
@@ -26,14 +25,14 @@ When asked a question, first discover what agents are available, then route the 
             .uuid()
             .optional()
             .describe(
-              "Optional organization ID to filter agents. If not provided, uses BLINK_ORG_ID environment variable or lists agents from all organizations."
+              "Optional organization ID to filter agents. If not provided, uses BLINK_ORG_ID environment variable or lists agents from all organizations.",
             ),
         }),
         execute: async ({ organization_id }) => {
           const apiToken = process.env.BLINK_API_TOKEN;
           if (!apiToken) {
             throw new Error(
-              "BLINK_API_TOKEN environment variable not set. Please configure your Blink API token."
+              "BLINK_API_TOKEN environment variable not set. Please configure your Blink API token.",
             );
           }
 
@@ -52,7 +51,7 @@ When asked a question, first discover what agents are available, then route the 
 
             if (!orgsResponse.ok) {
               throw new Error(
-                `Failed to list organizations: ${orgsResponse.statusText}`
+                `Failed to list organizations: ${orgsResponse.statusText}`,
               );
             }
 
@@ -65,7 +64,7 @@ When asked a question, first discover what agents are available, then route the 
                     headers: {
                       Authorization: `Bearer ${apiToken}`,
                     },
-                  }
+                  },
                 );
 
                 if (!agentsResponse.ok) {
@@ -74,7 +73,7 @@ When asked a question, first discover what agents are available, then route the 
 
                 const data = (await agentsResponse.json()) as { items: any[] };
                 return data.items;
-              })
+              }),
             );
             return allAgents.flat();
           }
@@ -86,7 +85,7 @@ When asked a question, first discover what agents are available, then route the 
               headers: {
                 Authorization: `Bearer ${apiToken}`,
               },
-            }
+            },
           );
 
           if (!response.ok) {
@@ -95,57 +94,6 @@ When asked a question, first discover what agents are available, then route the 
 
           const data = (await response.json()) as { items: any[] };
           return data.items;
-        },
-      }),
-
-      get_agent_capabilities: tool({
-        description:
-          "Get detailed information about a specific agent including its name, description, and request URL.",
-        inputSchema: z.object({
-          agent_id: z
-            .string()
-            .uuid()
-            .describe("The UUID of the agent to get information for."),
-        }),
-        execute: async ({ agent_id }) => {
-          const apiToken = process.env.BLINK_API_TOKEN;
-          if (!apiToken) {
-            throw new Error(
-              "BLINK_API_TOKEN environment variable not set. Please configure your Blink API token."
-            );
-          }
-
-          const baseURL = "https://blink.so";
-
-          const response = await fetch(`${baseURL}/api/agents/${agent_id}`, {
-            headers: {
-              Authorization: `Bearer ${apiToken}`,
-            },
-          });
-
-          if (!response.ok) {
-            throw new Error(`Failed to get agent: ${response.statusText}`);
-          }
-
-          const agent = (await response.json()) as {
-            id: string;
-            name: string;
-            description: string | null;
-            visibility: string;
-            request_url: string | null;
-            active_deployment_id: string | null;
-            organization_id: string;
-          };
-
-          return {
-            id: agent.id,
-            name: agent.name,
-            description: agent.description,
-            visibility: agent.visibility,
-            request_url: agent.request_url,
-            active_deployment_id: agent.active_deployment_id,
-            organization_id: agent.organization_id,
-          };
         },
       }),
     },
