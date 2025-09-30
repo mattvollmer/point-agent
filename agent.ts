@@ -200,6 +200,33 @@ You can delegate to multiple agents if needed and synthesize their responses.`,
 
           const baseURL = "https://blink.so";
 
+          // First check the chat status
+          const chatResponse = await fetch(`${baseURL}/api/chats/${chat_id}`, {
+            method: "GET",
+            headers: {
+              Authorization: `Bearer ${apiToken}`,
+            },
+          });
+
+          if (!chatResponse.ok) {
+            const errorText = await chatResponse.text();
+            throw new Error(
+              `Failed to get chat: ${chatResponse.status} ${chatResponse.statusText} - ${errorText}`,
+            );
+          }
+
+          const chatData = (await chatResponse.json()) as { status: string };
+
+          // If chat is still streaming, return processing status
+          if (chatData.status === "streaming") {
+            return {
+              status: "processing",
+              message:
+                "The agent is still processing your request. Please wait a moment and check again.",
+              chat_status: chatData.status,
+            };
+          }
+
           // Get the chat messages
           const response = await fetch(
             `${baseURL}/api/messages?chat_id=${chat_id}`,
@@ -220,7 +247,7 @@ You can delegate to multiple agents if needed and synthesize their responses.`,
 
           const messagesData = await response.json();
 
-          // Find the assistant's response (the last assistant message)
+          // Find all assistant messages
           const messages = (messagesData as { items: any[] }).items || [];
           const assistantMessages = messages.filter(
             (m: any) => m.role === "assistant",
@@ -231,26 +258,32 @@ You can delegate to multiple agents if needed and synthesize their responses.`,
               status: "processing",
               message:
                 "The agent is still processing your request. Please wait a moment and check again.",
+              chat_status: chatData.status,
             };
           }
 
-          // Get the last assistant message and extract text
-          const lastAssistantMessage =
-            assistantMessages[assistantMessages.length - 1];
-          let responseText = "";
+          // Collect text from ALL assistant messages, not just the last one
+          let fullResponse = "";
 
-          if (lastAssistantMessage.parts) {
-            for (const part of lastAssistantMessage.parts) {
-              if (part.type === "text" && part.text) {
-                responseText += part.text;
+          for (const msg of assistantMessages) {
+            if (msg.parts) {
+              for (const part of msg.parts) {
+                if (part.type === "text" && part.text) {
+                  fullResponse += part.text + "\n\n";
+                }
               }
             }
           }
 
+          // Clean up extra whitespace
+          fullResponse = fullResponse.trim();
+
           return {
             status: "completed",
-            response: responseText || "Agent returned no text response",
+            response: fullResponse || "Agent returned no text response",
             message_count: messages.length,
+            assistant_message_count: assistantMessages.length,
+            chat_status: chatData.status,
           };
         },
       }),
