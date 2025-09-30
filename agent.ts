@@ -215,7 +215,36 @@ You can delegate to multiple agents if needed and synthesize their responses.`,
             );
           }
 
-          const chatData = (await chatResponse.json()) as { status: string };
+          const chatData = (await chatResponse.json()) as {
+            status: string;
+            created_at: string;
+            error: string | null;
+          };
+
+          // Check if there's an error
+          if (chatData.error) {
+            return {
+              status: "error",
+              message: `The agent encountered an error: ${chatData.error}`,
+              chat_status: chatData.status,
+            };
+          }
+
+          // Check if the chat has been processing for too long (2 minutes)
+          const createdAt = new Date(chatData.created_at);
+          const now = new Date();
+          const elapsedMs = now.getTime() - createdAt.getTime();
+          const timeoutMs = 2 * 60 * 1000; // 2 minutes
+
+          if (elapsedMs > timeoutMs) {
+            return {
+              status: "timeout",
+              message:
+                "The agent has been processing for over 2 minutes. It may be stuck or taking longer than expected. You can try asking the question again.",
+              chat_status: chatData.status,
+              elapsed_seconds: Math.floor(elapsedMs / 1000),
+            };
+          }
 
           // If chat is still streaming, return processing status
           if (chatData.status === "streaming") {
@@ -224,6 +253,7 @@ You can delegate to multiple agents if needed and synthesize their responses.`,
               message:
                 "The agent is still processing your request. Please wait a moment and check again.",
               chat_status: chatData.status,
+              elapsed_seconds: Math.floor(elapsedMs / 1000),
             };
           }
 
