@@ -11,13 +11,16 @@ agent.on("chat", async ({ messages }) => {
 
 You have tools to:
 - List all available agents in your organization
-- Delegate queries to specialized agents
+- Delegate queries to specialized agents (asynchronous)
+- Check responses from delegated agents
 
-When asked a question:
-1. First use list_agents to discover what specialized agents are available
+Workflow for delegation:
+1. Use list_agents to discover what specialized agents are available
 2. Analyze which agent(s) are best suited for the query based on their names and descriptions
-3. Use delegate_to_agent to send the query to the appropriate specialist
-4. Present the response to the user
+3. Use delegate_to_agent to send the query - this returns immediately with a chat_id
+4. Use check_agent_response with the chat_id to get the actual response
+5. If the agent is still processing, wait a moment and check again
+6. Present the response to the user
 
 You can delegate to multiple agents if needed and synthesize their responses.`,
     messages: convertToModelMessages(messages),
@@ -105,7 +108,7 @@ You can delegate to multiple agents if needed and synthesize their responses.`,
 
       delegate_to_agent: tool({
         description:
-          "Delegate a query to a specialized agent. Use this after discovering which agent is best suited for the user's question. The agent will process the query and return a response.",
+          "Delegate a query to a specialized agent. This creates a chat with the agent and returns immediately with a chat ID. The agent will process the request asynchronously.",
         inputSchema: z.object({
           agent_id: z
             .string()
@@ -139,12 +142,11 @@ You can delegate to multiple agents if needed and synthesize their responses.`,
             headers: {
               "Content-Type": "application/json",
               Authorization: `Bearer ${apiToken}`,
-              Accept: "text/event-stream",
             },
             body: JSON.stringify({
               organization_id,
               agent_id,
-              stream: true,
+              stream: false,
               messages: [
                 {
                   role: "user",
@@ -166,81 +168,90 @@ You can delegate to multiple agents if needed and synthesize their responses.`,
             );
           }
 
-          // The response is a server-sent event stream
-          const reader = response.body?.getReader();
-          if (!reader) {
-            throw new Error("No response body from agent");
-          }
+          const chatData = await response.json();
 
-          const decoder = new TextDecoder();
-          let fullResponse = "";
+          return {
+            status: "delegated",
+            message:
+              "Successfully delegated query to agent. The agent is processing your request.",
+            chat_id: (chatData as { id: string }).id,
+            agent_id,
+            query,
+          };
+        },
+      }),
 
-          // Set a timeout for reading the stream (30 seconds)
-          const timeoutMs = 30000;
-          const timeoutPromise = new Promise<void>((_, reject) => {
-            setTimeout(
-              () => reject(new Error("Agent response timeout")),
-              timeoutMs,
+      check_agent_response: tool({
+        description:
+          "Check the response from an agent that was previously delegated to. Use this after delegate_to_agent to get the actual response.",
+        inputSchema: z.object({
+          chat_id: z
+            .string()
+            .uuid()
+            .describe("The chat ID returned from delegate_to_agent."),
+        }),
+        execute: async ({ chat_id }) => {
+          const apiToken = process.env.BLINK_API_TOKEN;
+          if (!apiToken) {
+            throw new Error(
+              "BLINK_API_TOKEN environment variable not set. Cannot authenticate with agent.",
             );
-          });
-
-          try {
-            await Promise.race([
-              (async () => {
-                while (true) {
-                  const { done, value } = await reader.read();
-                  if (done) break;
-
-                  const chunk = decoder.decode(value, { stream: true });
-                  const lines = chunk.split("\n");
-
-                  for (const line of lines) {
-                    if (line.startsWith("data: ")) {
-                      const data = line.slice(6).trim();
-                      if (!data || data === "[DONE]") continue;
-
-                      try {
-                        const parsed = JSON.parse(data);
-
-                        // Handle message chunk events from the agent
-                        if (
-                          parsed.event === "message.chunk.added" &&
-                          parsed.data?.chunk
-                        ) {
-                          const chunkData = parsed.data.chunk;
-                          if (
-                            chunkData.type === "text-delta" &&
-                            chunkData.textDelta
-                          ) {
-                            fullResponse += chunkData.textDelta;
-                          }
-                        }
-                      } catch (e) {
-                        // Skip invalid JSON
-                      }
-                    }
-                  }
-                }
-              })(),
-              timeoutPromise,
-            ]);
-          } catch (error) {
-            if (
-              error instanceof Error &&
-              error.message === "Agent response timeout"
-            ) {
-              // Return what we have so far
-              return (
-                fullResponse ||
-                "Agent response timed out after partial response"
-              );
-            }
-            throw error;
-          } finally {
-            reader.releaseLock();
           }
 
-          return fullResponse || "Agent returned no response";
+          const baseURL = "https://blink.so";
+
+          // Get the chat messages
+          const response = await fetch(
+            `${baseURL}/api/chats/${chat_id}/messages`,
+            {
+              method: "GET",
+              headers: {
+                Authorization: `Bearer ${apiToken}`,
+              },
+            },
+          );
+
+          if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(
+              `Failed to get chat messages: ${response.status} ${response.statusText} - ${errorText}`,
+            );
+          }
+
+          const messagesData = await response.json();
+
+          // Find the assistant's response (the last assistant message)
+          const messages = (messagesData as { items: any[] }).items || [];
+          const assistantMessages = messages.filter(
+            (m: any) => m.role === "assistant",
+          );
+
+          if (assistantMessages.length === 0) {
+            return {
+              status: "processing",
+              message:
+                "The agent is still processing your request. Please wait a moment and check again.",
+            };
+          }
+
+          // Get the last assistant message and extract text
+          const lastAssistantMessage =
+            assistantMessages[assistantMessages.length - 1];
+          let responseText = "";
+
+          if (lastAssistantMessage.parts) {
+            for (const part of lastAssistantMessage.parts) {
+              if (part.type === "text" && part.text) {
+                responseText += part.text;
+              }
+            }
+          }
+
+          return {
+            status: "completed",
+            response: responseText || "Agent returned no text response",
+            message_count: messages.length,
+          };
         },
       }),
     },
