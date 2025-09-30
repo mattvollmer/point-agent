@@ -4,6 +4,7 @@
   "type": "module",
   "private": true,
   "dependencies": {
+    "@blink-sdk/model-intent": "^0.0.4",
     "@blink-sdk/slackbot": "^0.0.10",
     "@types/node": "^24.6.0",
     "ai": "^5.0.59",

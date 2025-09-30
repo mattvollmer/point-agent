@@ -2,10 +2,11 @@ import { convertToModelMessages, streamText, tool } from "ai";
 import * as blink from "blink";
 import { z } from "zod";
 import * as slackbot from "@blink-sdk/slackbot";
+import withModelIntent from "@blink-sdk/model-intent";
 
 const agent = blink.agent();
 
-agent.on("chat", async ({ messages, context }) => {
+agent.on("chat", async ({ messages, context, abortSignal }) => {
   // Check if this is a Slack message
   const slackMetadata = slackbot.findLastMessageMetadata(messages);
 
@@ -40,201 +41,144 @@ ${slackbot.systemPrompt}
 </formatting-rules>`;
   }
 
-  return streamText({
-    model: "anthropic/claude-sonnet-4.5",
-    system: systemPrompt,
-    messages: convertToModelMessages(messages),
-    tools: {
-      ...slackbot.tools({
-        messages,
-        context,
+  const tools = {
+    ...slackbot.tools({
+      messages,
+      context,
+    }),
+
+    list_agents: tool({
+      description:
+        "List all available agents in the organization. Use this to discover what specialized agents exist and what they can do.",
+      inputSchema: z.object({
+        organization_id: z
+          .string()
+          .uuid()
+          .optional()
+          .describe(
+            "Optional organization ID to filter agents. If not provided, uses BLINK_ORG_ID environment variable or lists agents from all organizations.",
+          ),
       }),
-
-      list_agents: tool({
-        description:
-          "List all available agents in the organization. Use this to discover what specialized agents exist and what they can do.",
-        inputSchema: z.object({
-          organization_id: z
-            .string()
-            .uuid()
-            .optional()
-            .describe(
-              "Optional organization ID to filter agents. If not provided, uses BLINK_ORG_ID environment variable or lists agents from all organizations.",
-            ),
-        }),
-        execute: async ({ organization_id }) => {
-          const apiToken = process.env.BLINK_API_TOKEN;
-          if (!apiToken) {
-            throw new Error(
-              "BLINK_API_TOKEN environment variable not set. Please configure your Blink API token.",
-            );
-          }
-
-          const baseURL = "https://blink.so";
-
-          // Use provided org_id, fall back to env var, or list all
-          const orgId = organization_id || process.env.BLINK_ORG_ID;
-
-          // If no org specified, get all orgs and list agents from each
-          if (!orgId) {
-            const orgsResponse = await fetch(`${baseURL}/api/organizations`, {
-              headers: {
-                Authorization: `Bearer ${apiToken}`,
-              },
-            });
-
-            if (!orgsResponse.ok) {
-              throw new Error(
-                `Failed to list organizations: ${orgsResponse.statusText}`,
-              );
-            }
-
-            const orgs = (await orgsResponse.json()) as Array<{ id: string }>;
-            const allAgents = await Promise.all(
-              orgs.map(async (org) => {
-                const agentsResponse = await fetch(
-                  `${baseURL}/api/agents?organization_id=${org.id}&per_page=100`,
-                  {
-                    headers: {
-                      Authorization: `Bearer ${apiToken}`,
-                    },
-                  },
-                );
-
-                if (!agentsResponse.ok) {
-                  return [];
-                }
-
-                const data = (await agentsResponse.json()) as { items: any[] };
-                return data.items;
-              }),
-            );
-            return allAgents.flat();
-          }
-
-          // Otherwise list agents from specific org
-          const response = await fetch(
-            `${baseURL}/api/agents?organization_id=${orgId}&per_page=100`,
-            {
-              headers: {
-                Authorization: `Bearer ${apiToken}`,
-              },
-            },
+      execute: async ({ organization_id }) => {
+        const apiToken = process.env.BLINK_API_TOKEN;
+        if (!apiToken) {
+          throw new Error(
+            "BLINK_API_TOKEN environment variable not set. Please configure your Blink API token.",
           );
+        }
 
-          if (!response.ok) {
-            throw new Error(`Failed to list agents: ${response.statusText}`);
-          }
+        const baseURL = "https://blink.so";
 
-          const data = (await response.json()) as { items: any[] };
-          return data.items;
-        },
-      }),
+        // Use provided org_id, fall back to env var, or list all
+        const orgId = organization_id || process.env.BLINK_ORG_ID;
 
-      delegate_to_agent: tool({
-        description:
-          "Delegate a query to a specialized agent. This creates a chat with the agent (or continues an existing conversation) and returns immediately with a chat ID. The agent will process the request asynchronously.",
-        inputSchema: z.object({
-          agent_id: z
-            .string()
-            .uuid()
-            .describe(
-              "The UUID of the agent to delegate to. Get this from list_agents.",
-            ),
-          organization_id: z
-            .string()
-            .uuid()
-            .describe(
-              "The organization ID of the agent. Get this from list_agents.",
-            ),
-          query: z
-            .string()
-            .describe("The question or task to send to the specialized agent."),
-          force_new_chat: z
-            .boolean()
-            .optional()
-            .describe(
-              "If true, always create a new chat instead of continuing existing conversation. Default: false",
-            ),
-        }),
-        execute: async ({
-          agent_id,
-          organization_id,
-          query,
-          force_new_chat,
-        }) => {
-          const apiToken = process.env.BLINK_API_TOKEN;
-          if (!apiToken) {
+        // If no org specified, get all orgs and list agents from each
+        if (!orgId) {
+          const orgsResponse = await fetch(`${baseURL}/api/organizations`, {
+            headers: {
+              Authorization: `Bearer ${apiToken}`,
+            },
+          });
+
+          if (!orgsResponse.ok) {
             throw new Error(
-              "BLINK_API_TOKEN environment variable not set. Cannot authenticate with agent.",
+              `Failed to list organizations: ${orgsResponse.statusText}`,
             );
           }
 
-          const baseURL = "https://blink.so";
-
-          // Check if we already have a chat with this agent
-          const storeKey = `agent_chat:${agent_id}`;
-          const existingChatId = await context.store.get(storeKey);
-
-          if (existingChatId && !force_new_chat) {
-            // Send a new message to the existing chat
-            const response = await fetch(`${baseURL}/api/messages`, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${apiToken}`,
-              },
-              body: JSON.stringify({
-                chat_id: existingChatId,
-                behavior: "enqueue",
-                messages: [
-                  {
-                    role: "user",
-                    parts: [
-                      {
-                        type: "text",
-                        text: query,
-                      },
-                    ],
+          const orgs = (await orgsResponse.json()) as Array<{ id: string }>;
+          const allAgents = await Promise.all(
+            orgs.map(async (org) => {
+              const agentsResponse = await fetch(
+                `${baseURL}/api/agents?organization_id=${org.id}&per_page=100`,
+                {
+                  headers: {
+                    Authorization: `Bearer ${apiToken}`,
                   },
-                ],
-              }),
-            });
+                },
+              );
 
-            if (!response.ok) {
-              const errorText = await response.text();
-              // If the chat doesn't exist anymore, fall through to create new one
-              if (response.status === 404) {
-                await context.store.delete(storeKey);
-              } else {
-                throw new Error(
-                  `Failed to send message to agent: ${response.status} ${response.statusText} - ${errorText}`,
-                );
+              if (!agentsResponse.ok) {
+                return [];
               }
-            } else {
-              return {
-                status: "delegated",
-                message:
-                  "Successfully sent message to existing conversation with agent. The agent is processing your request.",
-                chat_id: existingChatId,
-                agent_id,
-                query,
-                continued_conversation: true,
-              };
-            }
-          }
 
-          // Create a new chat with the agent
-          const response = await fetch(`${baseURL}/api/chats`, {
+              const data = (await agentsResponse.json()) as { items: any[] };
+              return data.items;
+            }),
+          );
+          return allAgents.flat();
+        }
+
+        // Otherwise list agents from specific org
+        const response = await fetch(
+          `${baseURL}/api/agents?organization_id=${orgId}&per_page=100`,
+          {
+            headers: {
+              Authorization: `Bearer ${apiToken}`,
+            },
+          },
+        );
+
+        if (!response.ok) {
+          throw new Error(`Failed to list agents: ${response.statusText}`);
+        }
+
+        const data = (await response.json()) as { items: any[] };
+        return data.items;
+      },
+    }),
+
+    delegate_to_agent: tool({
+      description:
+        "Delegate a query to a specialized agent. This creates a chat with the agent (or continues an existing conversation) and returns immediately with a chat ID. The agent will process the request asynchronously.",
+      inputSchema: z.object({
+        agent_id: z
+          .string()
+          .uuid()
+          .describe(
+            "The UUID of the agent to delegate to. Get this from list_agents.",
+          ),
+        organization_id: z
+          .string()
+          .uuid()
+          .describe(
+            "The organization ID of the agent. Get this from list_agents.",
+          ),
+        query: z
+          .string()
+          .describe("The question or task to send to the specialized agent."),
+        force_new_chat: z
+          .boolean()
+          .optional()
+          .describe(
+            "If true, always create a new chat instead of continuing existing conversation. Default: false",
+          ),
+      }),
+      execute: async ({ agent_id, organization_id, query, force_new_chat }) => {
+        const apiToken = process.env.BLINK_API_TOKEN;
+        if (!apiToken) {
+          throw new Error(
+            "BLINK_API_TOKEN environment variable not set. Cannot authenticate with agent.",
+          );
+        }
+
+        const baseURL = "https://blink.so";
+
+        // Check if we already have a chat with this agent
+        const storeKey = `agent_chat:${agent_id}`;
+        const existingChatId = await context.store.get(storeKey);
+
+        if (existingChatId && !force_new_chat) {
+          // Send a new message to the existing chat
+          const response = await fetch(`${baseURL}/api/messages`, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
               Authorization: `Bearer ${apiToken}`,
             },
             body: JSON.stringify({
-              organization_id,
-              agent_id,
-              stream: false,
+              chat_id: existingChatId,
+              behavior: "enqueue",
               messages: [
                 {
                   role: "user",
@@ -251,180 +195,274 @@ ${slackbot.systemPrompt}
 
           if (!response.ok) {
             const errorText = await response.text();
-            throw new Error(
-              `Failed to communicate with agent: ${response.status} ${response.statusText} - ${errorText}`,
-            );
+            // If the chat doesn't exist anymore, fall through to create new one
+            if (response.status === 404) {
+              await context.store.delete(storeKey);
+            } else {
+              throw new Error(
+                `Failed to send message to agent: ${response.status} ${response.statusText} - ${errorText}`,
+              );
+            }
+          } else {
+            return {
+              status: "delegated",
+              message:
+                "Successfully sent message to existing conversation with agent. The agent is processing your request.",
+              chat_id: existingChatId,
+              agent_id,
+              query,
+              continued_conversation: true,
+            };
           }
+        }
 
-          const chatData = await response.json();
-          const newChatId = (chatData as { id: string }).id;
+        // Create a new chat with the agent
+        const response = await fetch(`${baseURL}/api/chats`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${apiToken}`,
+          },
+          body: JSON.stringify({
+            organization_id,
+            agent_id,
+            stream: false,
+            messages: [
+              {
+                role: "user",
+                parts: [
+                  {
+                    type: "text",
+                    text: query,
+                  },
+                ],
+              },
+            ],
+          }),
+        });
 
-          // Store the chat ID for this agent
-          await context.store.set(storeKey, newChatId);
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(
+            `Failed to communicate with agent: ${response.status} ${response.statusText} - ${errorText}`,
+          );
+        }
+
+        const chatData = await response.json();
+        const newChatId = (chatData as { id: string }).id;
+
+        // Store the chat ID for this agent
+        await context.store.set(storeKey, newChatId);
+
+        return {
+          status: "delegated",
+          message:
+            "Successfully delegated query to agent. The agent is processing your request.",
+          chat_id: newChatId,
+          agent_id,
+          query,
+          continued_conversation: false,
+        };
+      },
+    }),
+
+    check_agent_response: tool({
+      description:
+        "Check the response from an agent that was previously delegated to. Use this after delegate_to_agent to get the actual response.",
+      inputSchema: z.object({
+        chat_id: z
+          .string()
+          .uuid()
+          .describe("The chat ID returned from delegate_to_agent."),
+      }),
+      execute: async ({ chat_id }) => {
+        const apiToken = process.env.BLINK_API_TOKEN;
+        if (!apiToken) {
+          throw new Error(
+            "BLINK_API_TOKEN environment variable not set. Cannot authenticate with agent.",
+          );
+        }
+
+        const baseURL = "https://blink.so";
+
+        // First check the chat status
+        const chatResponse = await fetch(`${baseURL}/api/chats/${chat_id}`, {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${apiToken}`,
+          },
+        });
+
+        if (!chatResponse.ok) {
+          const errorText = await chatResponse.text();
+          throw new Error(
+            `Failed to get chat: ${chatResponse.status} ${chatResponse.statusText} - ${errorText}`,
+          );
+        }
+
+        const chatData = (await chatResponse.json()) as {
+          status: string;
+          created_at: string;
+          error: string | null;
+        };
+
+        // Check if there's an error
+        if (chatData.error) {
+          return {
+            status: "error",
+            message: `The agent encountered an error: ${chatData.error}`,
+            chat_status: chatData.status,
+          };
+        }
+
+        // If chat is still streaming, it's actively working - no timeout
+        if (chatData.status === "streaming") {
+          const createdAt = new Date(chatData.created_at);
+          const now = new Date();
+          const elapsedMs = now.getTime() - createdAt.getTime();
 
           return {
-            status: "delegated",
+            status: "processing",
             message:
-              "Successfully delegated query to agent. The agent is processing your request.",
-            chat_id: newChatId,
-            agent_id,
-            query,
-            continued_conversation: false,
+              "The agent is still processing your request. Please wait a moment and check again.",
+            chat_status: chatData.status,
+            elapsed_seconds: Math.floor(elapsedMs / 1000),
           };
-        },
-      }),
+        }
 
-      check_agent_response: tool({
-        description:
-          "Check the response from an agent that was previously delegated to. Use this after delegate_to_agent to get the actual response.",
-        inputSchema: z.object({
-          chat_id: z
-            .string()
-            .uuid()
-            .describe("The chat ID returned from delegate_to_agent."),
-        }),
-        execute: async ({ chat_id }) => {
-          const apiToken = process.env.BLINK_API_TOKEN;
-          if (!apiToken) {
-            throw new Error(
-              "BLINK_API_TOKEN environment variable not set. Cannot authenticate with agent.",
-            );
+        // If chat is NOT streaming but also not idle, check for timeout
+        // (This catches stuck chats that never started or got stuck)
+        if (chatData.status !== "idle") {
+          const createdAt = new Date(chatData.created_at);
+          const now = new Date();
+          const elapsedMs = now.getTime() - createdAt.getTime();
+          const timeoutMs = 2 * 60 * 1000; // 2 minutes
+
+          if (elapsedMs > timeoutMs) {
+            return {
+              status: "timeout",
+              message: `The agent chat is stuck in '${chatData.status}' state for over 2 minutes. It may have encountered an issue. You can try asking the question again.`,
+              chat_status: chatData.status,
+              elapsed_seconds: Math.floor(elapsedMs / 1000),
+            };
           }
 
-          const baseURL = "https://blink.so";
+          // Still within timeout window, return processing
+          return {
+            status: "processing",
+            message: `The agent chat is in '${chatData.status}' state. Waiting for it to start processing...`,
+            chat_status: chatData.status,
+            elapsed_seconds: Math.floor(elapsedMs / 1000),
+          };
+        }
 
-          // First check the chat status
-          const chatResponse = await fetch(`${baseURL}/api/chats/${chat_id}`, {
+        // Get the chat messages
+        const response = await fetch(
+          `${baseURL}/api/messages?chat_id=${chat_id}`,
+          {
             method: "GET",
             headers: {
               Authorization: `Bearer ${apiToken}`,
             },
-          });
+          },
+        );
 
-          if (!chatResponse.ok) {
-            const errorText = await chatResponse.text();
-            throw new Error(
-              `Failed to get chat: ${chatResponse.status} ${chatResponse.statusText} - ${errorText}`,
-            );
-          }
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(
+            `Failed to get chat messages: ${response.status} ${response.statusText} - ${errorText}`,
+          );
+        }
 
-          const chatData = (await chatResponse.json()) as {
-            status: string;
-            created_at: string;
-            error: string | null;
+        const messagesData = await response.json();
+
+        // Find all assistant messages
+        const messages = (messagesData as { items: any[] }).items || [];
+        const assistantMessages = messages.filter(
+          (m: any) => m.role === "assistant",
+        );
+
+        if (assistantMessages.length === 0) {
+          return {
+            status: "processing",
+            message:
+              "The agent is still processing your request. Please wait a moment and check again.",
+            chat_status: chatData.status,
           };
+        }
 
-          // Check if there's an error
-          if (chatData.error) {
-            return {
-              status: "error",
-              message: `The agent encountered an error: ${chatData.error}`,
-              chat_status: chatData.status,
-            };
-          }
+        // Collect text from ALL assistant messages, not just the last one
+        let fullResponse = "";
 
-          // If chat is still streaming, it's actively working - no timeout
-          if (chatData.status === "streaming") {
-            const createdAt = new Date(chatData.created_at);
-            const now = new Date();
-            const elapsedMs = now.getTime() - createdAt.getTime();
-
-            return {
-              status: "processing",
-              message:
-                "The agent is still processing your request. Please wait a moment and check again.",
-              chat_status: chatData.status,
-              elapsed_seconds: Math.floor(elapsedMs / 1000),
-            };
-          }
-
-          // If chat is NOT streaming but also not idle, check for timeout
-          // (This catches stuck chats that never started or got stuck)
-          if (chatData.status !== "idle") {
-            const createdAt = new Date(chatData.created_at);
-            const now = new Date();
-            const elapsedMs = now.getTime() - createdAt.getTime();
-            const timeoutMs = 2 * 60 * 1000; // 2 minutes
-
-            if (elapsedMs > timeoutMs) {
-              return {
-                status: "timeout",
-                message: `The agent chat is stuck in '${chatData.status}' state for over 2 minutes. It may have encountered an issue. You can try asking the question again.`,
-                chat_status: chatData.status,
-                elapsed_seconds: Math.floor(elapsedMs / 1000),
-              };
-            }
-
-            // Still within timeout window, return processing
-            return {
-              status: "processing",
-              message: `The agent chat is in '${chatData.status}' state. Waiting for it to start processing...`,
-              chat_status: chatData.status,
-              elapsed_seconds: Math.floor(elapsedMs / 1000),
-            };
-          }
-
-          // Get the chat messages
-          const response = await fetch(
-            `${baseURL}/api/messages?chat_id=${chat_id}`,
-            {
-              method: "GET",
-              headers: {
-                Authorization: `Bearer ${apiToken}`,
-              },
-            },
-          );
-
-          if (!response.ok) {
-            const errorText = await response.text();
-            throw new Error(
-              `Failed to get chat messages: ${response.status} ${response.statusText} - ${errorText}`,
-            );
-          }
-
-          const messagesData = await response.json();
-
-          // Find all assistant messages
-          const messages = (messagesData as { items: any[] }).items || [];
-          const assistantMessages = messages.filter(
-            (m: any) => m.role === "assistant",
-          );
-
-          if (assistantMessages.length === 0) {
-            return {
-              status: "processing",
-              message:
-                "The agent is still processing your request. Please wait a moment and check again.",
-              chat_status: chatData.status,
-            };
-          }
-
-          // Collect text from ALL assistant messages, not just the last one
-          let fullResponse = "";
-
-          for (const msg of assistantMessages) {
-            if (msg.parts) {
-              for (const part of msg.parts) {
-                if (part.type === "text" && part.text) {
-                  fullResponse += part.text + "\n\n";
-                }
+        for (const msg of assistantMessages) {
+          if (msg.parts) {
+            for (const part of msg.parts) {
+              if (part.type === "text" && part.text) {
+                fullResponse += part.text + "\n\n";
               }
             }
           }
+        }
 
-          // Clean up extra whitespace
-          fullResponse = fullResponse.trim();
+        // Clean up extra whitespace
+        fullResponse = fullResponse.trim();
 
-          return {
-            status: "completed",
-            response: fullResponse || "Agent returned no text response",
-            message_count: messages.length,
-            assistant_message_count: assistantMessages.length,
-            chat_status: chatData.status,
-          };
-        },
-      }),
-    },
+        return {
+          status: "completed",
+          response: fullResponse || "Agent returned no text response",
+          message_count: messages.length,
+          assistant_message_count: assistantMessages.length,
+          chat_status: chatData.status,
+        };
+      },
+    }),
+  };
+
+  return streamText({
+    model: "anthropic/claude-sonnet-4.5",
+    system: systemPrompt,
+    messages: convertToModelMessages(messages),
+    tools: withModelIntent(tools, {
+      async onModelIntents(modelIntents) {
+        const metadata = slackbot.findLastMessageMetadata(messages);
+        if (!metadata) {
+          return;
+        }
+        if (abortSignal?.aborted) {
+          const client = await slackbot.createClient(context, metadata);
+          try {
+            await client.assistant.threads.setStatus({
+              channel_id: metadata.channel,
+              thread_ts: metadata.threadTs ?? metadata.ts,
+              status: ``,
+            });
+          } catch (err) {
+            // Ignore errors setting status
+          }
+          return;
+        }
+
+        let statuses = modelIntents.map((i) => {
+          let displayIntent = i.modelIntent;
+          if (displayIntent.length > 0) {
+            displayIntent =
+              displayIntent.charAt(0).toLowerCase() + displayIntent.slice(1);
+          }
+          return displayIntent;
+        });
+        statuses = [...new Set(statuses)];
+        const client = await slackbot.createClient(context, metadata);
+        try {
+          await client.assistant.threads.setStatus({
+            channel_id: metadata.channel,
+            thread_ts: metadata.threadTs ?? metadata.ts,
+            status: `is ${statuses.join(", ")}...`,
+          });
+        } catch (err) {
+          // Ignore errors setting status
+        }
+      },
+    }),
   });
 });
 
