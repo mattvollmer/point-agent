@@ -130,11 +130,19 @@ You can delegate to multiple agents if needed and synthesize their responses.`,
             );
           }
 
+          const apiToken = process.env.BLINK_API_TOKEN;
+          if (!apiToken) {
+            throw new Error(
+              "BLINK_API_TOKEN environment variable not set. Cannot authenticate with agent.",
+            );
+          }
+
           // Call the agent's chat endpoint
           const response = await fetch(`${request_url}/_agent/chat`, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
+              Authorization: `Bearer ${apiToken}`,
             },
             body: JSON.stringify({
               messages: [
