@@ -113,23 +113,17 @@ You can delegate to multiple agents if needed and synthesize their responses.`,
             .describe(
               "The UUID of the agent to delegate to. Get this from list_agents.",
             ),
-          request_url: z
+          organization_id: z
             .string()
-            .url()
+            .uuid()
             .describe(
-              "The request URL of the agent. Get this from list_agents.",
+              "The organization ID of the agent. Get this from list_agents.",
             ),
           query: z
             .string()
             .describe("The question or task to send to the specialized agent."),
         }),
-        execute: async ({ agent_id, request_url, query }) => {
-          if (!request_url) {
-            throw new Error(
-              `Agent ${agent_id} does not have a request_url. It may not be deployed yet.`,
-            );
-          }
-
+        execute: async ({ agent_id, organization_id, query }) => {
           const apiToken = process.env.BLINK_API_TOKEN;
           if (!apiToken) {
             throw new Error(
@@ -137,34 +131,37 @@ You can delegate to multiple agents if needed and synthesize their responses.`,
             );
           }
 
-          // Call the agent's chat endpoint
-          const response = await fetch(`${request_url}/_agent/chat`, {
+          const baseURL = "https://blink.so";
+
+          // Create a chat with the agent and send the message
+          const response = await fetch(`${baseURL}/api/chats`, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
               Authorization: `Bearer ${apiToken}`,
+              Accept: "text/event-stream",
             },
             body: JSON.stringify({
+              organization_id,
+              agent_id,
+              stream: true,
               messages: [
                 {
                   role: "user",
                   content: query,
                 },
               ],
-              chat: {
-                key: `orchestrator-${Date.now()}`,
-              },
             }),
           });
 
           if (!response.ok) {
+            const errorText = await response.text();
             throw new Error(
-              `Failed to communicate with agent: ${response.status} ${response.statusText}`,
+              `Failed to communicate with agent: ${response.status} ${response.statusText} - ${errorText}`,
             );
           }
 
           // The response is a server-sent event stream
-          // We'll collect the text parts from the stream
           const reader = response.body?.getReader();
           if (!reader) {
             throw new Error("No response body from agent");
@@ -183,13 +180,24 @@ You can delegate to multiple agents if needed and synthesize their responses.`,
 
               for (const line of lines) {
                 if (line.startsWith("data: ")) {
-                  const data = line.slice(6);
-                  if (data === "[DONE]") continue;
+                  const data = line.slice(6).trim();
+                  if (!data || data === "[DONE]") continue;
 
                   try {
                     const parsed = JSON.parse(data);
-                    if (parsed.type === "text-delta" && parsed.textDelta) {
-                      fullResponse += parsed.textDelta;
+
+                    // Handle message chunk events from the agent
+                    if (
+                      parsed.event === "message.chunk.added" &&
+                      parsed.data?.chunk
+                    ) {
+                      const chunkData = parsed.data.chunk;
+                      if (
+                        chunkData.type === "text-delta" &&
+                        chunkData.textDelta
+                      ) {
+                        fullResponse += chunkData.textDelta;
+                      }
                     }
                   } catch (e) {
                     // Skip invalid JSON
