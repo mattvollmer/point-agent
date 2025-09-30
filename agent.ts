@@ -4,7 +4,7 @@ import { z } from "zod";
 
 const agent = blink.agent();
 
-agent.on("chat", async ({ messages }) => {
+agent.on("chat", async ({ messages, context }) => {
   return streamText({
     model: "anthropic/claude-sonnet-4.5",
     system: `You are an orchestration agent that can discover and delegate to other specialized agents.
@@ -21,6 +21,11 @@ Workflow for delegation:
 4. Use check_agent_response with the chat_id to get the actual response
 5. If the agent is still processing, wait a moment and check again
 6. Present the response to the user
+
+Conversation continuity:
+- When you delegate to an agent multiple times in the same conversation, messages will be sent to the same chat
+- This allows the specialist agent to maintain context from previous questions
+- Each agent has its own separate conversation thread
 
 You can delegate to multiple agents if needed and synthesize their responses.`,
     messages: convertToModelMessages(messages),
@@ -108,7 +113,7 @@ You can delegate to multiple agents if needed and synthesize their responses.`,
 
       delegate_to_agent: tool({
         description:
-          "Delegate a query to a specialized agent. This creates a chat with the agent and returns immediately with a chat ID. The agent will process the request asynchronously.",
+          "Delegate a query to a specialized agent. This creates a chat with the agent (or continues an existing conversation) and returns immediately with a chat ID. The agent will process the request asynchronously.",
         inputSchema: z.object({
           agent_id: z
             .string()
@@ -125,8 +130,19 @@ You can delegate to multiple agents if needed and synthesize their responses.`,
           query: z
             .string()
             .describe("The question or task to send to the specialized agent."),
+          force_new_chat: z
+            .boolean()
+            .optional()
+            .describe(
+              "If true, always create a new chat instead of continuing existing conversation. Default: false",
+            ),
         }),
-        execute: async ({ agent_id, organization_id, query }) => {
+        execute: async ({
+          agent_id,
+          organization_id,
+          query,
+          force_new_chat,
+        }) => {
           const apiToken = process.env.BLINK_API_TOKEN;
           if (!apiToken) {
             throw new Error(
@@ -136,7 +152,59 @@ You can delegate to multiple agents if needed and synthesize their responses.`,
 
           const baseURL = "https://blink.so";
 
-          // Create a chat with the agent and send the message
+          // Check if we already have a chat with this agent
+          const storeKey = `agent_chat:${agent_id}`;
+          const existingChatId = await context.store.get(storeKey);
+
+          if (existingChatId && !force_new_chat) {
+            // Send a new message to the existing chat
+            const response = await fetch(`${baseURL}/api/messages`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${apiToken}`,
+              },
+              body: JSON.stringify({
+                chat_id: existingChatId,
+                behavior: "enqueue",
+                messages: [
+                  {
+                    role: "user",
+                    parts: [
+                      {
+                        type: "text",
+                        text: query,
+                      },
+                    ],
+                  },
+                ],
+              }),
+            });
+
+            if (!response.ok) {
+              const errorText = await response.text();
+              // If the chat doesn't exist anymore, fall through to create new one
+              if (response.status === 404) {
+                await context.store.delete(storeKey);
+              } else {
+                throw new Error(
+                  `Failed to send message to agent: ${response.status} ${response.statusText} - ${errorText}`,
+                );
+              }
+            } else {
+              return {
+                status: "delegated",
+                message:
+                  "Successfully sent message to existing conversation with agent. The agent is processing your request.",
+                chat_id: existingChatId,
+                agent_id,
+                query,
+                continued_conversation: true,
+              };
+            }
+          }
+
+          // Create a new chat with the agent
           const response = await fetch(`${baseURL}/api/chats`, {
             method: "POST",
             headers: {
@@ -169,14 +237,19 @@ You can delegate to multiple agents if needed and synthesize their responses.`,
           }
 
           const chatData = await response.json();
+          const newChatId = (chatData as { id: string }).id;
+
+          // Store the chat ID for this agent
+          await context.store.set(storeKey, newChatId);
 
           return {
             status: "delegated",
             message:
               "Successfully delegated query to agent. The agent is processing your request.",
-            chat_id: (chatData as { id: string }).id,
+            chat_id: newChatId,
             agent_id,
             query,
+            continued_conversation: false,
           };
         },
       }),
