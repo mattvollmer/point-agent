@@ -10,5 +10,7 @@ export default defineConfig({
     // Ensure we use Node.js platform and conditions
     platform: "node",
     conditions: ["node", "import"],
+    // Prioritize Node.js exports over browser
+    mainFields: ["module", "main"],
   }),
 });
