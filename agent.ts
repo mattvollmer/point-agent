@@ -26,7 +26,7 @@ When asked a question, first discover what agents are available, then route the 
             .uuid()
             .optional()
             .describe(
-              "Optional organization ID to filter agents. If not provided, lists agents from all organizations you have access to.",
+              "Optional organization ID to filter agents. If not provided, uses BLINK_ORG_ID environment variable or lists agents from all organizations.",
             ),
         }),
         execute: async ({ organization_id }) => {
@@ -39,8 +39,11 @@ When asked a question, first discover what agents are available, then route the 
 
           const baseURL = process.env.BLINK_API_URL || "https://blink.so";
 
+          // Use provided org_id, fall back to env var, or list all
+          const orgId = organization_id || process.env.BLINK_ORG_ID;
+
           // If no org specified, get all orgs and list agents from each
-          if (!organization_id) {
+          if (!orgId) {
             const orgsResponse = await fetch(`${baseURL}/api/organizations`, {
               headers: {
                 Authorization: `Bearer ${apiToken}`,
@@ -78,7 +81,7 @@ When asked a question, first discover what agents are available, then route the 
 
           // Otherwise list agents from specific org
           const response = await fetch(
-            `${baseURL}/api/agents?organization_id=${organization_id}&per_page=100`,
+            `${baseURL}/api/agents?organization_id=${orgId}&per_page=100`,
             {
               headers: {
                 Authorization: `Bearer ${apiToken}`,
