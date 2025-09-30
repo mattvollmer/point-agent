@@ -6,7 +6,7 @@ const agent = blink.agent();
 
 agent.on("chat", async ({ messages }) => {
   return streamText({
-    model: "anthropic/claude-sonnet-4",
+    model: "anthropic/claude-sonnet-4.5",
     system: `You are an orchestration agent that can discover and delegate to other specialized agents.
 
 You have tools to:
