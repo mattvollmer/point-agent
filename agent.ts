@@ -148,15 +148,6 @@ When asked a question, first discover what agents are available, then route the 
           };
         },
       }),
-
-      get_ip_info: tool({
-        description: "Get IP address information of the computer.",
-        inputSchema: z.object({}),
-        execute: async () => {
-          const response = await fetch("https://ipinfo.io/json");
-          return response.json();
-        },
-      }),
     },
   });
 });
