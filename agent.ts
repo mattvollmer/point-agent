@@ -53,9 +53,9 @@ When asked a question, first discover what agents are available, then route the 
               );
             }
 
-            const orgs = await orgsResponse.json();
+            const orgs = (await orgsResponse.json()) as Array<{ id: string }>;
             const allAgents = await Promise.all(
-              orgs.map(async (org: any) => {
+              orgs.map(async (org) => {
                 const agentsResponse = await fetch(
                   `${baseURL}/api/agents?organization_id=${org.id}&per_page=100`,
                   {
@@ -69,7 +69,7 @@ When asked a question, first discover what agents are available, then route the 
                   return [];
                 }
 
-                const data = await agentsResponse.json();
+                const data = (await agentsResponse.json()) as { items: any[] };
                 return data.items;
               }),
             );
@@ -90,7 +90,7 @@ When asked a question, first discover what agents are available, then route the 
             throw new Error(`Failed to list agents: ${response.statusText}`);
           }
 
-          const data = await response.json();
+          const data = (await response.json()) as { items: any[] };
           return data.items;
         },
       }),
@@ -124,7 +124,15 @@ When asked a question, first discover what agents are available, then route the 
             throw new Error(`Failed to get agent: ${response.statusText}`);
           }
 
-          const agent = await response.json();
+          const agent = (await response.json()) as {
+            id: string;
+            name: string;
+            description: string | null;
+            visibility: string;
+            request_url: string | null;
+            active_deployment_id: string | null;
+            organization_id: string;
+          };
 
           return {
             id: agent.id,
