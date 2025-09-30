@@ -74,6 +74,10 @@ When handling a user query:
 4. Use check_agent_response with the chat_id to retrieve the response
 5. If agent is still processing, wait briefly and check again
 6. Present the response to the user
+
+CRITICAL: Do NOT return to the user until you have the complete response.
+Do NOT say "I will follow up" or "checking in a moment".
+Keep calling check_agent_response until you get the full answer.
 </workflow>
 
 <multi-agent-synthesis>
@@ -121,14 +125,14 @@ ${slackbot.systemPrompt}
           .uuid()
           .optional()
           .describe(
-            "Optional organization ID to filter agents. If not provided, uses BLINK_ORG_ID environment variable or lists agents from all organizations.",
+            "Optional organization ID to filter agents. If not provided, uses BLINK_ORG_ID environment variable or lists agents from all organizations."
           ),
       }),
       execute: async ({ organization_id }) => {
         const apiToken = process.env.BLINK_API_TOKEN;
         if (!apiToken) {
           throw new Error(
-            "BLINK_API_TOKEN environment variable not set. Please configure your Blink API token.",
+            "BLINK_API_TOKEN environment variable not set. Please configure your Blink API token."
           );
         }
 
@@ -147,7 +151,7 @@ ${slackbot.systemPrompt}
 
           if (!orgsResponse.ok) {
             throw new Error(
-              `Failed to list organizations: ${orgsResponse.statusText}`,
+              `Failed to list organizations: ${orgsResponse.statusText}`
             );
           }
 
@@ -160,7 +164,7 @@ ${slackbot.systemPrompt}
                   headers: {
                     Authorization: `Bearer ${apiToken}`,
                   },
-                },
+                }
               );
 
               if (!agentsResponse.ok) {
@@ -169,7 +173,7 @@ ${slackbot.systemPrompt}
 
               const data = (await agentsResponse.json()) as { items: any[] };
               return data.items;
-            }),
+            })
           );
           return allAgents.flat();
         }
@@ -181,7 +185,7 @@ ${slackbot.systemPrompt}
             headers: {
               Authorization: `Bearer ${apiToken}`,
             },
-          },
+          }
         );
 
         if (!response.ok) {
@@ -201,13 +205,13 @@ ${slackbot.systemPrompt}
           .string()
           .uuid()
           .describe(
-            "The UUID of the agent to delegate to. Get this from list_agents.",
+            "The UUID of the agent to delegate to. Get this from list_agents."
           ),
         organization_id: z
           .string()
           .uuid()
           .describe(
-            "The organization ID of the agent. Get this from list_agents.",
+            "The organization ID of the agent. Get this from list_agents."
           ),
         query: z
           .string()
@@ -216,14 +220,14 @@ ${slackbot.systemPrompt}
           .boolean()
           .optional()
           .describe(
-            "If true, always create a new chat instead of continuing existing conversation. Default: false",
+            "If true, always create a new chat instead of continuing existing conversation. Default: false"
           ),
       }),
       execute: async ({ agent_id, organization_id, query, force_new_chat }) => {
         const apiToken = process.env.BLINK_API_TOKEN;
         if (!apiToken) {
           throw new Error(
-            "BLINK_API_TOKEN environment variable not set. Cannot authenticate with agent.",
+            "BLINK_API_TOKEN environment variable not set. Cannot authenticate with agent."
           );
         }
 
@@ -265,7 +269,7 @@ ${slackbot.systemPrompt}
               await context.store.delete(storeKey);
             } else {
               throw new Error(
-                `Failed to send message to agent: ${response.status} ${response.statusText} - ${errorText}`,
+                `Failed to send message to agent: ${response.status} ${response.statusText} - ${errorText}`
               );
             }
           } else {
@@ -309,7 +313,7 @@ ${slackbot.systemPrompt}
         if (!response.ok) {
           const errorText = await response.text();
           throw new Error(
-            `Failed to communicate with agent: ${response.status} ${response.statusText} - ${errorText}`,
+            `Failed to communicate with agent: ${response.status} ${response.statusText} - ${errorText}`
           );
         }
 
@@ -344,7 +348,7 @@ ${slackbot.systemPrompt}
         const apiToken = process.env.BLINK_API_TOKEN;
         if (!apiToken) {
           throw new Error(
-            "BLINK_API_TOKEN environment variable not set. Cannot authenticate with agent.",
+            "BLINK_API_TOKEN environment variable not set. Cannot authenticate with agent."
           );
         }
 
@@ -361,7 +365,7 @@ ${slackbot.systemPrompt}
         if (!chatResponse.ok) {
           const errorText = await chatResponse.text();
           throw new Error(
-            `Failed to get chat: ${chatResponse.status} ${chatResponse.statusText} - ${errorText}`,
+            `Failed to get chat: ${chatResponse.status} ${chatResponse.statusText} - ${errorText}`
           );
         }
 
@@ -429,13 +433,13 @@ ${slackbot.systemPrompt}
             headers: {
               Authorization: `Bearer ${apiToken}`,
             },
-          },
+          }
         );
 
         if (!response.ok) {
           const errorText = await response.text();
           throw new Error(
-            `Failed to get chat messages: ${response.status} ${response.statusText} - ${errorText}`,
+            `Failed to get chat messages: ${response.status} ${response.statusText} - ${errorText}`
           );
         }
 
@@ -444,7 +448,7 @@ ${slackbot.systemPrompt}
         // Find all assistant messages
         const messages = (messagesData as { items: any[] }).items || [];
         const assistantMessages = messages.filter(
-          (m: any) => m.role === "assistant",
+          (m: any) => m.role === "assistant"
         );
 
         if (assistantMessages.length === 0) {
