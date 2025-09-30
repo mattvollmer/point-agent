@@ -175,41 +175,67 @@ You can delegate to multiple agents if needed and synthesize their responses.`,
           const decoder = new TextDecoder();
           let fullResponse = "";
 
+          // Set a timeout for reading the stream (30 seconds)
+          const timeoutMs = 30000;
+          const timeoutPromise = new Promise<void>((_, reject) => {
+            setTimeout(
+              () => reject(new Error("Agent response timeout")),
+              timeoutMs,
+            );
+          });
+
           try {
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done) break;
+            await Promise.race([
+              (async () => {
+                while (true) {
+                  const { done, value } = await reader.read();
+                  if (done) break;
 
-              const chunk = decoder.decode(value, { stream: true });
-              const lines = chunk.split("\n");
+                  const chunk = decoder.decode(value, { stream: true });
+                  const lines = chunk.split("\n");
 
-              for (const line of lines) {
-                if (line.startsWith("data: ")) {
-                  const data = line.slice(6).trim();
-                  if (!data || data === "[DONE]") continue;
+                  for (const line of lines) {
+                    if (line.startsWith("data: ")) {
+                      const data = line.slice(6).trim();
+                      if (!data || data === "[DONE]") continue;
 
-                  try {
-                    const parsed = JSON.parse(data);
+                      try {
+                        const parsed = JSON.parse(data);
 
-                    // Handle message chunk events from the agent
-                    if (
-                      parsed.event === "message.chunk.added" &&
-                      parsed.data?.chunk
-                    ) {
-                      const chunkData = parsed.data.chunk;
-                      if (
-                        chunkData.type === "text-delta" &&
-                        chunkData.textDelta
-                      ) {
-                        fullResponse += chunkData.textDelta;
+                        // Handle message chunk events from the agent
+                        if (
+                          parsed.event === "message.chunk.added" &&
+                          parsed.data?.chunk
+                        ) {
+                          const chunkData = parsed.data.chunk;
+                          if (
+                            chunkData.type === "text-delta" &&
+                            chunkData.textDelta
+                          ) {
+                            fullResponse += chunkData.textDelta;
+                          }
+                        }
+                      } catch (e) {
+                        // Skip invalid JSON
                       }
                     }
-                  } catch (e) {
-                    // Skip invalid JSON
                   }
                 }
-              }
+              })(),
+              timeoutPromise,
+            ]);
+          } catch (error) {
+            if (
+              error instanceof Error &&
+              error.message === "Agent response timeout"
+            ) {
+              // Return what we have so far
+              return (
+                fullResponse ||
+                "Agent response timed out after partial response"
+              );
             }
+            throw error;
           } finally {
             reader.releaseLock();
           }
