@@ -72,8 +72,12 @@ When handling a user query:
 2. Identify which specialist agent(s) match the query (refer to specialist-agents list)
 3. Use delegate_to_agent with the agent_id to send the query (returns immediately with chat_id)
 4. Use check_agent_response with the chat_id to retrieve the response
-5. If agent is still processing, wait briefly and check again
-6. Present the response to the user
+   - This tool automatically waits and polls until the agent completes (up to 2 minutes)
+   - You do not need to call it multiple times - it handles all polling internally
+   - Simply wait for it to return the completed response
+5. Present the response to the user
+
+Do not tell users you are "waiting for a response" or "will follow up" - the check_agent_response tool handles all waiting automatically.
 </workflow>
 
 <multi-agent-synthesis>
@@ -333,7 +337,7 @@ ${slackbot.systemPrompt}
 
     check_agent_response: tool({
       description:
-        "Check the response from an agent that was previously delegated to. Use this after delegate_to_agent to get the actual response.",
+        "Check the response from an agent that was previously delegated to. Use this after delegate_to_agent to get the actual response. This tool will automatically wait and poll until the agent completes (up to 2 minutes).",
       inputSchema: z.object({
         chat_id: z
           .string()
@@ -349,136 +353,132 @@ ${slackbot.systemPrompt}
         }
 
         const baseURL = "https://blink.so";
+        const maxAttempts = 40; // 40 attempts * 3 seconds = 2 minutes max
+        const pollDelayMs = 3000; // 3 seconds between polls
 
-        // First check the chat status
-        const chatResponse = await fetch(`${baseURL}/api/chats/${chat_id}`, {
-          method: "GET",
-          headers: {
-            Authorization: `Bearer ${apiToken}`,
-          },
-        });
-
-        if (!chatResponse.ok) {
-          const errorText = await chatResponse.text();
-          throw new Error(
-            `Failed to get chat: ${chatResponse.status} ${chatResponse.statusText} - ${errorText}`,
-          );
-        }
-
-        const chatData = (await chatResponse.json()) as {
-          status: string;
-          created_at: string;
-          error: string | null;
-        };
-
-        // Check if there's an error
-        if (chatData.error) {
-          return {
-            status: "error",
-            message: `The agent encountered an error: ${chatData.error}`,
-            chat_status: chatData.status,
-          };
-        }
-
-        // If chat is still streaming, it's actively working - no timeout
-        if (chatData.status === "streaming") {
-          const createdAt = new Date(chatData.created_at);
-          const now = new Date();
-          const elapsedMs = now.getTime() - createdAt.getTime();
-
-          return {
-            status: "processing",
-            message:
-              "The agent is still processing your request. Please wait a moment and check again.",
-            chat_status: chatData.status,
-            elapsed_seconds: Math.floor(elapsedMs / 1000),
-          };
-        }
-
-        // If chat is NOT streaming but also not idle, check for timeout
-        // (This catches stuck chats that never started or got stuck)
-        if (chatData.status !== "idle") {
-          const createdAt = new Date(chatData.created_at);
-          const now = new Date();
-          const elapsedMs = now.getTime() - createdAt.getTime();
-          const timeoutMs = 2 * 60 * 1000; // 2 minutes
-
-          if (elapsedMs > timeoutMs) {
-            return {
-              status: "timeout",
-              message: `The agent chat is stuck in '${chatData.status}' state for over 2 minutes. It may have encountered an issue. You can try asking the question again.`,
-              chat_status: chatData.status,
-              elapsed_seconds: Math.floor(elapsedMs / 1000),
-            };
-          }
-
-          // Still within timeout window, return processing
-          return {
-            status: "processing",
-            message: `The agent chat is in '${chatData.status}' state. Waiting for it to start processing...`,
-            chat_status: chatData.status,
-            elapsed_seconds: Math.floor(elapsedMs / 1000),
-          };
-        }
-
-        // Get the chat messages
-        const response = await fetch(
-          `${baseURL}/api/messages?chat_id=${chat_id}`,
-          {
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+          // First check the chat status
+          const chatResponse = await fetch(`${baseURL}/api/chats/${chat_id}`, {
             method: "GET",
             headers: {
               Authorization: `Bearer ${apiToken}`,
             },
-          },
-        );
+          });
 
-        if (!response.ok) {
-          const errorText = await response.text();
-          throw new Error(
-            `Failed to get chat messages: ${response.status} ${response.statusText} - ${errorText}`,
-          );
-        }
+          if (!chatResponse.ok) {
+            const errorText = await chatResponse.text();
+            throw new Error(
+              `Failed to get chat: ${chatResponse.status} ${chatResponse.statusText} - ${errorText}`,
+            );
+          }
 
-        const messagesData = await response.json();
-
-        // Find all assistant messages
-        const messages = (messagesData as { items: any[] }).items || [];
-        const assistantMessages = messages.filter(
-          (m: any) => m.role === "assistant",
-        );
-
-        if (assistantMessages.length === 0) {
-          return {
-            status: "processing",
-            message:
-              "The agent is still processing your request. Please wait a moment and check again.",
-            chat_status: chatData.status,
+          const chatData = (await chatResponse.json()) as {
+            status: string;
+            created_at: string;
+            error: string | null;
           };
-        }
 
-        // Collect text from ALL assistant messages, not just the last one
-        let fullResponse = "";
+          // Check if there's an error
+          if (chatData.error) {
+            return {
+              status: "error",
+              message: `The agent encountered an error: ${chatData.error}`,
+              chat_status: chatData.status,
+            };
+          }
 
-        for (const msg of assistantMessages) {
-          if (msg.parts) {
-            for (const part of msg.parts) {
-              if (part.type === "text" && part.text) {
-                fullResponse += part.text + "\n\n";
+          // If chat is still streaming or not idle, we need to wait
+          if (chatData.status === "streaming" || chatData.status !== "idle") {
+            // Check if we've exceeded overall timeout
+            const createdAt = new Date(chatData.created_at);
+            const now = new Date();
+            const elapsedMs = now.getTime() - createdAt.getTime();
+            const timeoutMs = 5 * 60 * 1000; // 5 minutes absolute timeout
+
+            if (elapsedMs > timeoutMs) {
+              return {
+                status: "timeout",
+                message: `The agent chat has been processing for over 5 minutes. It may have encountered an issue. You can try asking the question again.`,
+                chat_status: chatData.status,
+                elapsed_seconds: Math.floor(elapsedMs / 1000),
+                attempts: attempt,
+              };
+            }
+
+            // Still processing - wait and try again unless it's our last attempt
+            if (attempt < maxAttempts) {
+              await new Promise((resolve) => setTimeout(resolve, pollDelayMs));
+              continue;
+            } else {
+              return {
+                status: "timeout",
+                message: `The agent is still processing after ${attempt} checks. Please try again later.`,
+                chat_status: chatData.status,
+                elapsed_seconds: Math.floor(elapsedMs / 1000),
+                attempts: attempt,
+              };
+            }
+          }
+
+          // Get the chat messages
+          const response = await fetch(
+            `${baseURL}/api/messages?chat_id=${chat_id}`,
+            {
+              method: "GET",
+              headers: {
+                Authorization: `Bearer ${apiToken}`,
+              },
+            },
+          );
+
+          if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(
+              `Failed to get chat messages: ${response.status} ${response.statusText} - ${errorText}`,
+            );
+          }
+
+          const messagesData = await response.json();
+
+          // Find all assistant messages
+          const messages = (messagesData as { items: any[] }).items || [];
+          const assistantMessages = messages.filter(
+            (m: any) => m.role === "assistant",
+          );
+
+          if (assistantMessages.length === 0) {
+            return {
+              status: "processing",
+              message:
+                "The agent is still processing your request. Please wait a moment and check again.",
+              chat_status: chatData.status,
+            };
+          }
+
+          // Collect text from ALL assistant messages, not just the last one
+          let fullResponse = "";
+
+          for (const msg of assistantMessages) {
+            if (msg.parts) {
+              for (const part of msg.parts) {
+                if (part.type === "text" && part.text) {
+                  fullResponse += part.text + "\n\n";
+                }
               }
             }
           }
+
+          // Clean up extra whitespace
+          fullResponse = fullResponse.trim();
+
+          return {
+            status: "completed",
+            response: fullResponse || "Agent returned no text response",
+            message_count: messages.length,
+            assistant_message_count: assistantMessages.length,
+            chat_status: chatData.status,
+          };
         }
-
-        // Clean up extra whitespace
-        fullResponse = fullResponse.trim();
-
-        return {
-          status: "completed",
-          response: fullResponse || "Agent returned no text response",
-          message_count: messages.length,
-          assistant_message_count: assistantMessages.length,
-          chat_status: chatData.status,
-        };
       },
     }),
   };
