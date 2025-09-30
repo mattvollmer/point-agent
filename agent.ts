@@ -11,9 +11,15 @@ agent.on("chat", async ({ messages }) => {
 
 You have tools to:
 - List all available agents in your organization
-- Delegate queries to the appropriate specialized agents
+- Delegate queries to specialized agents
 
-When asked a question, first discover what agents are available, then route the query appropriately.`,
+When asked a question:
+1. First use list_agents to discover what specialized agents are available
+2. Analyze which agent(s) are best suited for the query based on their names and descriptions
+3. Use delegate_to_agent to send the query to the appropriate specialist
+4. Present the response to the user
+
+You can delegate to multiple agents if needed and synthesize their responses.`,
     messages: convertToModelMessages(messages),
     tools: {
       list_agents: tool({
@@ -94,6 +100,100 @@ When asked a question, first discover what agents are available, then route the 
 
           const data = (await response.json()) as { items: any[] };
           return data.items;
+        },
+      }),
+
+      delegate_to_agent: tool({
+        description:
+          "Delegate a query to a specialized agent. Use this after discovering which agent is best suited for the user's question. The agent will process the query and return a response.",
+        inputSchema: z.object({
+          agent_id: z
+            .string()
+            .uuid()
+            .describe(
+              "The UUID of the agent to delegate to. Get this from list_agents.",
+            ),
+          request_url: z
+            .string()
+            .url()
+            .describe(
+              "The request URL of the agent. Get this from list_agents.",
+            ),
+          query: z
+            .string()
+            .describe("The question or task to send to the specialized agent."),
+        }),
+        execute: async ({ agent_id, request_url, query }) => {
+          if (!request_url) {
+            throw new Error(
+              `Agent ${agent_id} does not have a request_url. It may not be deployed yet.`,
+            );
+          }
+
+          // Call the agent's chat endpoint
+          const response = await fetch(`${request_url}/_agent/chat`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              messages: [
+                {
+                  role: "user",
+                  content: query,
+                },
+              ],
+              chat: {
+                key: `orchestrator-${Date.now()}`,
+              },
+            }),
+          });
+
+          if (!response.ok) {
+            throw new Error(
+              `Failed to communicate with agent: ${response.status} ${response.statusText}`,
+            );
+          }
+
+          // The response is a server-sent event stream
+          // We'll collect the text parts from the stream
+          const reader = response.body?.getReader();
+          if (!reader) {
+            throw new Error("No response body from agent");
+          }
+
+          const decoder = new TextDecoder();
+          let fullResponse = "";
+
+          try {
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+
+              const chunk = decoder.decode(value, { stream: true });
+              const lines = chunk.split("\n");
+
+              for (const line of lines) {
+                if (line.startsWith("data: ")) {
+                  const data = line.slice(6);
+                  if (data === "[DONE]") continue;
+
+                  try {
+                    const parsed = JSON.parse(data);
+                    if (parsed.type === "text-delta" && parsed.textDelta) {
+                      fullResponse += parsed.textDelta;
+                    }
+                  } catch (e) {
+                    // Skip invalid JSON
+                  }
+                }
+              }
+            }
+          } finally {
+            reader.releaseLock();
+          }
+
+          return fullResponse || "Agent returned no response";
         },
       }),
     },
