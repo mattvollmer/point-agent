@@ -377,6 +377,14 @@ ${slackbot.systemPrompt}
           error: string | null;
         };
 
+        // Debug: Log the created_at value to understand the issue
+        console.log("[DEBUG] created_at raw value:", chatData.created_at);
+        console.log(
+          "[DEBUG] created_at parsed:",
+          new Date(chatData.created_at),
+        );
+        console.log("[DEBUG] current time:", new Date());
+
         // Check if there's an error
         if (chatData.error) {
           return {
