@@ -388,33 +388,57 @@ ${slackbot.systemPrompt}
 
         // If chat is still streaming, it's actively working - no timeout
         if (chatData.status === "streaming") {
-          const createdAt = new Date(chatData.created_at);
-          const now = new Date();
-          const elapsedMs = now.getTime() - createdAt.getTime();
+          let elapsed_seconds: number | undefined;
+
+          try {
+            const createdAt = new Date(chatData.created_at);
+            const now = new Date();
+
+            // Validate the parsed date is reasonable (not in the past by more than 24 hours)
+            const elapsedMs = now.getTime() - createdAt.getTime();
+            if (elapsedMs >= 0 && elapsedMs < 24 * 60 * 60 * 1000) {
+              elapsed_seconds = Math.floor(elapsedMs / 1000);
+            }
+          } catch (err) {
+            // Invalid date format - omit elapsed time
+          }
 
           return {
             status: "processing",
             message:
               "The agent is still processing your request. Please wait a moment and check again.",
             chat_status: chatData.status,
-            elapsed_seconds: Math.floor(elapsedMs / 1000),
+            ...(elapsed_seconds !== undefined && { elapsed_seconds }),
           };
         }
 
         // If chat is NOT streaming but also not idle, check for timeout
         // (This catches stuck chats that never started or got stuck)
         if (chatData.status !== "idle") {
-          const createdAt = new Date(chatData.created_at);
-          const now = new Date();
-          const elapsedMs = now.getTime() - createdAt.getTime();
+          let elapsed_seconds: number | undefined;
+          let elapsedMs: number | undefined;
+
+          try {
+            const createdAt = new Date(chatData.created_at);
+            const now = new Date();
+            elapsedMs = now.getTime() - createdAt.getTime();
+
+            // Validate the parsed date is reasonable
+            if (elapsedMs >= 0 && elapsedMs < 24 * 60 * 60 * 1000) {
+              elapsed_seconds = Math.floor(elapsedMs / 1000);
+            }
+          } catch (err) {
+            // Invalid date format - omit elapsed time
+          }
+
           const timeoutMs = 2 * 60 * 1000; // 2 minutes
 
-          if (elapsedMs > timeoutMs) {
+          if (elapsedMs !== undefined && elapsedMs > timeoutMs) {
             return {
               status: "timeout",
               message: `The agent chat is stuck in '${chatData.status}' state for over 2 minutes. It may have encountered an issue. You can try asking the question again.`,
               chat_status: chatData.status,
-              elapsed_seconds: Math.floor(elapsedMs / 1000),
+              ...(elapsed_seconds !== undefined && { elapsed_seconds }),
             };
           }
 
@@ -423,7 +447,7 @@ ${slackbot.systemPrompt}
             status: "processing",
             message: `The agent chat is in '${chatData.status}' state. Waiting for it to start processing...`,
             chat_status: chatData.status,
-            elapsed_seconds: Math.floor(elapsedMs / 1000),
+            ...(elapsed_seconds !== undefined && { elapsed_seconds }),
           };
         }
 
