@@ -275,6 +275,10 @@ ${slackbot.systemPrompt}
               );
             }
           } else {
+            // Reset check count for new message to existing chat
+            const checkCountKey = `check_count:${existingChatId}`;
+            await context.store.set(checkCountKey, "0");
+
             return {
               status: "delegated",
               message:
@@ -325,6 +329,10 @@ ${slackbot.systemPrompt}
         // Store the chat ID for this agent
         await context.store.set(storeKey, newChatId);
 
+        // Initialize check count for new chat
+        const checkCountKey = `check_count:${newChatId}`;
+        await context.store.set(checkCountKey, "0");
+
         return {
           status: "delegated",
           message:
@@ -356,6 +364,13 @@ ${slackbot.systemPrompt}
 
         const baseURL = "https://blink.so";
 
+        // Track how many times we've checked this chat
+        const checkCountKey = `check_count:${chat_id}`;
+        const previousCount = await context.store.get(checkCountKey);
+        const checkCount =
+          (previousCount ? parseInt(previousCount, 10) : 0) + 1;
+        await context.store.set(checkCountKey, checkCount.toString());
+
         // First check the chat status
         const chatResponse = await fetch(`${baseURL}/api/chats/${chat_id}`, {
           method: "GET",
@@ -377,141 +392,40 @@ ${slackbot.systemPrompt}
           error: string | null;
         };
 
-        // Debug: Log the created_at value to understand the issue
-        console.log("[DEBUG] created_at raw value:", chatData.created_at);
-        console.log(
-          "[DEBUG] created_at parsed:",
-          new Date(chatData.created_at),
-        );
-        console.log("[DEBUG] current time:", new Date());
-
         // Check if there's an error
         if (chatData.error) {
           return {
             status: "error",
             message: `The agent encountered an error: ${chatData.error}`,
             chat_status: chatData.status,
+            check_count: checkCount,
           };
         }
 
-        // If chat is still streaming, it's actively working - no timeout
+        // If chat is still streaming, it's actively working
         if (chatData.status === "streaming") {
-          let elapsed_seconds: number | undefined;
-
-          try {
-            let createdAtMs: number;
-
-            // Handle different timestamp formats
-            if (typeof chatData.created_at === "number") {
-              // Numeric timestamp - check if it's in seconds or milliseconds
-              // If less than 10 billion, it's probably seconds (before year 2286)
-              createdAtMs =
-                chatData.created_at < 10000000000
-                  ? chatData.created_at * 1000 // Convert seconds to milliseconds
-                  : chatData.created_at; // Already in milliseconds
-            } else {
-              // String timestamp - try to parse as ISO date
-              const parsed = new Date(chatData.created_at);
-              createdAtMs = parsed.getTime();
-
-              // If parsing resulted in invalid date, check if it's a numeric string
-              if (isNaN(createdAtMs)) {
-                const numericValue = parseInt(chatData.created_at, 10);
-                if (!isNaN(numericValue)) {
-                  createdAtMs =
-                    numericValue < 10000000000
-                      ? numericValue * 1000
-                      : numericValue;
-                }
-              }
-            }
-
-            const now = Date.now();
-
-            // Validate the parsed date is reasonable (not in the past by more than 24 hours)
-            const elapsedMs = now - createdAtMs;
-            if (elapsedMs >= 0 && elapsedMs < 24 * 60 * 60 * 1000) {
-              elapsed_seconds = Math.floor(elapsedMs / 1000);
-            } else {
-              console.log(
-                "[DEBUG] Elapsed time validation failed:",
-                elapsedMs,
-                "ms",
-              );
-            }
-          } catch (err) {
-            console.log("[DEBUG] Date parsing error:", err);
-            // Invalid date format - omit elapsed time
-          }
-
           return {
             status: "processing",
             message:
               "The agent is still processing your request. Please wait a moment and check again.",
             chat_status: chatData.status,
-            ...(elapsed_seconds !== undefined && { elapsed_seconds }),
+            check_count: checkCount,
           };
         }
 
         // If chat is NOT streaming but also not idle, check for timeout
-        // (This catches stuck chats that never started or got stuck)
         if (chatData.status !== "idle") {
-          let elapsed_seconds: number | undefined;
-          let elapsedMs: number | undefined;
-
-          try {
-            let createdAtMs: number;
-
-            // Handle different timestamp formats
-            if (typeof chatData.created_at === "number") {
-              // Numeric timestamp - check if it's in seconds or milliseconds
-              createdAtMs =
-                chatData.created_at < 10000000000
-                  ? chatData.created_at * 1000
-                  : chatData.created_at;
-            } else {
-              // String timestamp - try to parse as ISO date
-              const parsed = new Date(chatData.created_at);
-              createdAtMs = parsed.getTime();
-
-              // If parsing resulted in invalid date, check if it's a numeric string
-              if (isNaN(createdAtMs)) {
-                const numericValue = parseInt(chatData.created_at, 10);
-                if (!isNaN(numericValue)) {
-                  createdAtMs =
-                    numericValue < 10000000000
-                      ? numericValue * 1000
-                      : numericValue;
-                }
-              }
-            }
-
-            const now = Date.now();
-            elapsedMs = now - createdAtMs;
-
-            // Validate the parsed date is reasonable
-            if (elapsedMs >= 0 && elapsedMs < 24 * 60 * 60 * 1000) {
-              elapsed_seconds = Math.floor(elapsedMs / 1000);
-            } else {
-              console.log(
-                "[DEBUG] Timeout check - elapsed validation failed:",
-                elapsedMs,
-                "ms",
-              );
-            }
-          } catch (err) {
-            console.log("[DEBUG] Timeout check - date parsing error:", err);
-            // Invalid date format - omit elapsed time
-          }
-
+          // Calculate elapsed time only for timeout detection
+          const createdAt = new Date(chatData.created_at);
+          const elapsedMs = Date.now() - createdAt.getTime();
           const timeoutMs = 2 * 60 * 1000; // 2 minutes
 
-          if (elapsedMs !== undefined && elapsedMs > timeoutMs) {
+          if (elapsedMs > timeoutMs) {
             return {
               status: "timeout",
               message: `The agent chat is stuck in '${chatData.status}' state for over 2 minutes. It may have encountered an issue. You can try asking the question again.`,
               chat_status: chatData.status,
-              ...(elapsed_seconds !== undefined && { elapsed_seconds }),
+              check_count: checkCount,
             };
           }
 
@@ -520,7 +434,7 @@ ${slackbot.systemPrompt}
             status: "processing",
             message: `The agent chat is in '${chatData.status}' state. Waiting for it to start processing...`,
             chat_status: chatData.status,
-            ...(elapsed_seconds !== undefined && { elapsed_seconds }),
+            check_count: checkCount,
           };
         }
 
