@@ -399,15 +399,48 @@ ${slackbot.systemPrompt}
           let elapsed_seconds: number | undefined;
 
           try {
-            const createdAt = new Date(chatData.created_at);
-            const now = new Date();
+            let createdAtMs: number;
+
+            // Handle different timestamp formats
+            if (typeof chatData.created_at === "number") {
+              // Numeric timestamp - check if it's in seconds or milliseconds
+              // If less than 10 billion, it's probably seconds (before year 2286)
+              createdAtMs =
+                chatData.created_at < 10000000000
+                  ? chatData.created_at * 1000 // Convert seconds to milliseconds
+                  : chatData.created_at; // Already in milliseconds
+            } else {
+              // String timestamp - try to parse as ISO date
+              const parsed = new Date(chatData.created_at);
+              createdAtMs = parsed.getTime();
+
+              // If parsing resulted in invalid date, check if it's a numeric string
+              if (isNaN(createdAtMs)) {
+                const numericValue = parseInt(chatData.created_at, 10);
+                if (!isNaN(numericValue)) {
+                  createdAtMs =
+                    numericValue < 10000000000
+                      ? numericValue * 1000
+                      : numericValue;
+                }
+              }
+            }
+
+            const now = Date.now();
 
             // Validate the parsed date is reasonable (not in the past by more than 24 hours)
-            const elapsedMs = now.getTime() - createdAt.getTime();
+            const elapsedMs = now - createdAtMs;
             if (elapsedMs >= 0 && elapsedMs < 24 * 60 * 60 * 1000) {
               elapsed_seconds = Math.floor(elapsedMs / 1000);
+            } else {
+              console.log(
+                "[DEBUG] Elapsed time validation failed:",
+                elapsedMs,
+                "ms",
+              );
             }
           } catch (err) {
+            console.log("[DEBUG] Date parsing error:", err);
             // Invalid date format - omit elapsed time
           }
 
@@ -427,15 +460,47 @@ ${slackbot.systemPrompt}
           let elapsedMs: number | undefined;
 
           try {
-            const createdAt = new Date(chatData.created_at);
-            const now = new Date();
-            elapsedMs = now.getTime() - createdAt.getTime();
+            let createdAtMs: number;
+
+            // Handle different timestamp formats
+            if (typeof chatData.created_at === "number") {
+              // Numeric timestamp - check if it's in seconds or milliseconds
+              createdAtMs =
+                chatData.created_at < 10000000000
+                  ? chatData.created_at * 1000
+                  : chatData.created_at;
+            } else {
+              // String timestamp - try to parse as ISO date
+              const parsed = new Date(chatData.created_at);
+              createdAtMs = parsed.getTime();
+
+              // If parsing resulted in invalid date, check if it's a numeric string
+              if (isNaN(createdAtMs)) {
+                const numericValue = parseInt(chatData.created_at, 10);
+                if (!isNaN(numericValue)) {
+                  createdAtMs =
+                    numericValue < 10000000000
+                      ? numericValue * 1000
+                      : numericValue;
+                }
+              }
+            }
+
+            const now = Date.now();
+            elapsedMs = now - createdAtMs;
 
             // Validate the parsed date is reasonable
             if (elapsedMs >= 0 && elapsedMs < 24 * 60 * 60 * 1000) {
               elapsed_seconds = Math.floor(elapsedMs / 1000);
+            } else {
+              console.log(
+                "[DEBUG] Timeout check - elapsed validation failed:",
+                elapsedMs,
+                "ms",
+              );
             }
           } catch (err) {
+            console.log("[DEBUG] Timeout check - date parsing error:", err);
             // Invalid date format - omit elapsed time
           }
 
