@@ -275,6 +275,10 @@ ${slackbot.systemPrompt}
               );
             }
           } else {
+            // Reset check count for new message to existing chat
+            const checkCountKey = `check_count:${existingChatId}`;
+            await context.store.set(checkCountKey, "0");
+
             return {
               status: "delegated",
               message:
@@ -324,6 +328,10 @@ ${slackbot.systemPrompt}
 
         // Store the chat ID for this agent
         await context.store.set(storeKey, newChatId);
+
+        // Initialize check count for new chat
+        const checkCountKey = `check_count:${newChatId}`;
+        await context.store.set(checkCountKey, "0");
 
         return {
           status: "delegated",
