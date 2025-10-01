@@ -240,50 +240,90 @@ ${slackbot.systemPrompt}
         const existingChatId = await context.store.get(storeKey);
 
         if (existingChatId && !force_new_chat) {
-          // Send a new message to the existing chat
-          const response = await fetch(`${baseURL}/api/messages`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${apiToken}`,
+          // Check if the existing chat is stale before reusing it
+          const chatCheckResponse = await fetch(
+            `${baseURL}/api/chats/${existingChatId}`,
+            {
+              method: "GET",
+              headers: {
+                Authorization: `Bearer ${apiToken}`,
+              },
             },
-            body: JSON.stringify({
-              chat_id: existingChatId,
-              behavior: "enqueue",
-              messages: [
-                {
-                  role: "user",
-                  parts: [
-                    {
-                      type: "text",
-                      text: query,
-                    },
-                  ],
-                },
-              ],
-            }),
-          });
+          );
 
-          if (!response.ok) {
-            const errorText = await response.text();
-            // If the chat doesn't exist anymore, fall through to create new one
-            if (response.status === 404) {
-              await context.store.delete(storeKey);
-            } else {
-              throw new Error(
-                `Failed to send message to agent: ${response.status} ${response.statusText} - ${errorText}`,
-              );
-            }
-          } else {
-            return {
-              status: "delegated",
-              message:
-                "Successfully sent message to existing conversation with agent. The agent is processing your request.",
-              chat_id: existingChatId,
-              agent_id,
-              query,
-              continued_conversation: true,
+          let isStale = false;
+
+          if (chatCheckResponse.ok) {
+            const chatData = (await chatCheckResponse.json()) as {
+              created_at: string;
             };
+
+            // Check if chat is more than 1 hour old
+            const createdAt = new Date(chatData.created_at);
+            const now = new Date();
+            const ageMs = now.getTime() - createdAt.getTime();
+            const oneHourMs = 60 * 60 * 1000;
+
+            if (ageMs > oneHourMs) {
+              isStale = true;
+              console.log(
+                `[INFO] Chat ${existingChatId} is stale (${Math.floor(ageMs / 1000 / 60)} minutes old). Creating new chat.`,
+              );
+              await context.store.delete(storeKey);
+            }
+          } else if (chatCheckResponse.status === 404) {
+            // Chat doesn't exist anymore
+            isStale = true;
+            await context.store.delete(storeKey);
+          }
+
+          // If not stale, try to send message to existing chat
+          if (!isStale) {
+            // Send a new message to the existing chat
+            const response = await fetch(`${baseURL}/api/messages`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${apiToken}`,
+              },
+              body: JSON.stringify({
+                chat_id: existingChatId,
+                behavior: "enqueue",
+                messages: [
+                  {
+                    role: "user",
+                    parts: [
+                      {
+                        type: "text",
+                        text: query,
+                      },
+                    ],
+                  },
+                ],
+              }),
+            });
+
+            if (!response.ok) {
+              const errorText = await response.text();
+              // If the chat doesn't exist anymore, fall through to create new one
+              if (response.status === 404) {
+                await context.store.delete(storeKey);
+              } else {
+                throw new Error(
+                  `Failed to send message to agent: ${response.status} ${response.statusText} - ${errorText}`,
+                );
+              }
+            } else {
+              return {
+                status: "delegated",
+                message:
+                  "Successfully sent message to existing conversation with agent. The agent is processing your request.",
+                chat_id: existingChatId,
+                agent_id,
+                query,
+                continued_conversation: true,
+              };
+            }
           }
         }
 
