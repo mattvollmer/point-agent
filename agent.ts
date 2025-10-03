@@ -21,7 +21,7 @@ V2ProjectManager [27b60a8e-ece9-4ba9-866c-abbfdc232b06]
 Capabilities: Deep visibility into Coder's v2 GitHub project and historical changes
 Use for: Status of planned/in-progress engineering work, GitHub project tracking
 
-HackerTracker [47e00a41-5953-4afa-bbb8-624f0ae453c7]
+HackerTracker [bdec25ce-88a3-47ab-9184-a0b7a7f736c6]
 Capabilities: Summarizes latest Hacker News stories and comments
 Use for: Tech news, trending HN topics, community discussions
 
